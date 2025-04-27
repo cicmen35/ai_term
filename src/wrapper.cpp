@@ -14,7 +14,7 @@ bool AI::loadModel(const std::string& modelPath) {
     
     // Set model parameters
     llama_model_params model_params = llama_model_default_params();
-    
+
     // Load the model
     llama_model* model = llama_model_load_from_file(modelPath.c_str(), model_params);
     if (!model) {
@@ -44,39 +44,77 @@ std::string AI::generate(const std::string& prompt) {
     if (!modelLoaded || !ctx) {
         return "[Model not loaded]";
     }
-    
-    // Simple fallback implementation that works reliably
-    // This is a good starting point that you can expand later
-    
-    // Format the prompt with a simple template
-    std::string formatted_prompt = prompt;
-    
-    // Add some basic response generation
-    std::string result;
-    
-    if (prompt.find("hello") != std::string::npos || prompt.find("hi") != std::string::npos) {
-        result = "Hello! I'm your AI terminal assistant powered by TinyLlama. How can I help you today?";
-    } else if (prompt.find("help") != std::string::npos) {
-        result = "I can help with various tasks. You can ask me questions, request information, or have a conversation.";
-    } else if (prompt.find("who") != std::string::npos && prompt.find("you") != std::string::npos) {
-        result = "I'm an AI terminal assistant built with C++ and powered by the TinyLlama model via llama.cpp.";
-    } else if (prompt.find("what") != std::string::npos && prompt.find("do") != std::string::npos) {
-        result = "I can answer questions, provide information, and assist with various tasks through this terminal interface.";
-    } else if (prompt.find("thank") != std::string::npos) {
-        result = "You're welcome! Feel free to ask if you need anything else.";
-    } else if (prompt.find("time") != std::string::npos) {
-        result = "I don't have access to the current time without system calls.";
-    } else if (prompt.find("weather") != std::string::npos) {
-        result = "I don't have access to current weather information. You would need to integrate a weather API for that functionality.";
-    } else if (prompt.find("joke") != std::string::npos) {
-        result = "Why don't scientists trust atoms? Because they make up everything!";
-    } else if (prompt.find("feature") != std::string::npos) {
-        result = "Currently I'm running in a simple mode. You can enhance me by improving the llama.cpp integration or adding features like command history, special commands, or API integrations.";
-    } else {
-        // Generic response for other inputs
-        result = "I processed your input: '" + prompt + "'. Currently running in simplified mode while we resolve the tokenization issues with TinyLlama.";
+
+    llama_context* context = static_cast<llama_context*>(ctx);
+    const llama_model* model = llama_get_model(context);
+    const llama_vocab* vocab = llama_model_get_vocab(model);
+
+    // Tokenize the prompt
+    std::vector<llama_token> tokens_prompt(2048);
+    int n_prompt_tokens = llama_tokenize(
+        vocab,
+        prompt.c_str(),
+        prompt.length(),
+        tokens_prompt.data(),
+        tokens_prompt.size(),
+        true,  // add_special: add BOS/EOS if needed
+        false  // parse_special: don't parse special tokens
+    );
+    if (n_prompt_tokens < 0) {
+        return "[Tokenization failed]";
     }
-    
+    tokens_prompt.resize(n_prompt_tokens);
+
+    // Feed prompt tokens to model
+    llama_batch batch = llama_batch_get_one(tokens_prompt.data(), tokens_prompt.size());
+    if (llama_decode(context, batch) != 0) {
+        return "[Prompt decoding failed]";
+    }
+
+    // Generation parameters
+    const int n_predict = DEFAULT_N_PREDICT;
+    const int n_ctx = llama_n_ctx(context);
+    std::vector<llama_token> output_tokens;
+    output_tokens.reserve(n_predict);
+
+    // Sampling setup (greedy for simplicity)
+    llama_sampler* sampler = llama_sampler_init_greedy();
+
+    // Start generation loop
+    llama_token token = 0;
+    for (int i = 0; i < n_predict; ++i) {
+        token = llama_sampler_sample(sampler, context, -1);
+        if (llama_vocab_is_eog(vocab, token) || llama_vocab_is_control(vocab, token)) {
+            break;
+        }
+        output_tokens.push_back(token);
+        llama_sampler_accept(sampler, token);
+
+        // Feed generated token back to model
+        llama_batch gen_batch = llama_batch_get_one(&token, 1);
+        if (llama_decode(context, gen_batch) != 0) {
+            break;
+        }
+    }
+    llama_sampler_free(sampler);
+
+    // Detokenize output
+    std::string result;
+    std::vector<char> result_buf(4096);
+    int n_chars = llama_detokenize(
+        vocab,
+        output_tokens.data(),
+        output_tokens.size(),
+        result_buf.data(),
+        result_buf.size(),
+        true,   // remove_special
+        false   // unparse_special
+    );
+    if (n_chars > 0) {
+        result.assign(result_buf.data(), n_chars);
+    } else {
+        result = "[Detokenization failed]";
+    }
     return result;
 }
 
