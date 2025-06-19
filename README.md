@@ -1,6 +1,6 @@
-# ai_term
+# AI terminal using Llama model
 
-An intelligent terminal with AI-powered assistance, written in C++.
+An intelligent terminal with AI chat assistant.
 
 ## Features
 - Command parsing and execution
